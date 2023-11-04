@@ -1,0 +1,259 @@
+//load "fflapack";
+real cpu= clock();
+int seed= 1364785492*clock();
+randinit(seed);
+verbosity=1;
+/*
+*******************************************************************************
+  User Variable definitions:
+*******************************************************************************
+*/
+int npart= 1; //Number of particles
+real boxwidth= 10.0;
+real boxheight= 10.0;
+// xradius > yradius for notation
+real xradius= 1.0; //horizontal axis of the particles
+real yradius= 0.5; //vertical axis of the particles
+real xshift= 0.0; //horizontal shift from the xcenter
+real yshift= 0.0; //vertical shift from the ycenter
+real a0= 72.0*pi/180.0; //angle measured from the horizontal positive axis in counterclockwise
+real phi= 90.0 -a0*180.0/pi; //angle between the easy axis of the particle and external applied field
+real numberofpoints= 905.0; // points in half the hysteresis curve
+int meshpoints= 50; //meshpoints
+real beta=0.00003;
+real tolerance=1e-6;
+real initialfield= -5.0;
+real finalfield= 5.0;
+/*
+  Filename generator
+*/
+string name= "SW_2020X"+string(xradius)+"Y"+string(yradius)+"A"+string(phi);
+ofstream outfile(name+".txt");
+
+
+/*
+*******************************************************************************
+  Constructing geometry and space
+*******************************************************************************
+*/
+
+border a1(t=0.0,boxwidth){x=t; y=0.0; label=901;};
+border a2(t=0.0,boxheight){x=boxwidth; y=t; label=902;};
+border a3(t=0.0,boxwidth){x=boxwidth-t; y=boxheight; label=903;};
+border a4(t=0.0,boxheight){x=0.0; y=boxheight-t; label=904;};
+real xcenter= boxwidth/2.0;
+real ycenter= boxheight/2.0;
+border C0(t=0, 2.0*pi){
+  x= xcenter +xradius*cos(t)*cos(a0) -yradius*sin(t)*sin(a0) +xshift;
+  y= ycenter +xradius*cos(t)*sin(a0) +yradius*sin(t)*cos(a0) +yshift;
+  label=0;
+};
+
+int mp=meshpoints;
+mesh Th= buildmesh( a1(mp)+a2(mp)+a3(mp)+a4(mp)+C0(-mp) );
+plot(Th,wait=1);
+
+// Auxiliar mesh to calculate the volume of each particle.
+// Add one mesh for each particle in the cell
+mesh Th0= buildmesh(C0(mp));
+
+/*
+*******************************************************************************
+  Variable definitions.
+*******************************************************************************
+*/
+real[int] mx(npart); real[int] my(npart);
+real[int] mxpast(npart); real[int] mypast(npart);
+real[int] V(npart); real[int] h(2);
+real[int] Gradmx(2); real[int] Gradmy(2);
+real totalvolume, theta, hi, hf, dh, E0, gnorm, dirx, diry, st, mnorm, E1;
+real ED, mtotx, mtoty;
+int it, f;
+
+
+/*
+*******************************************************************************
+  Constructing the variational formulation and space functions
+*******************************************************************************
+*/
+matrix A;
+// Periodic Boundary Conditions:
+/*
+fespace Vh(Th, P1, periodic=[[901,x],[903,x],[902,y],[904,y]]);
+Vh uh, vh, hx, hy, F;
+varf aa(uh,vh)= int2d(Th)( dx(uh)*dx(vh) +dy(uh)*dy(vh) );
+*/
+// Zero Boundary Conditions:
+fespace Vh(Th, P1);
+Vh uh, vh, hx, hy, F;
+varf aa(uh,vh)= int2d(Th)( dx(uh)*dx(vh) +dy(uh)*dy(vh) ) +on(901,902,903,904, uh=0);
+
+// add ont int1d for each particle in the array
+varf ff(unused, vh)= -int1d(Th,0)( (mx(0)*N.x +my(0)*N.y)*vh )
+                     //-int1d(Th,1)( (mx(1)*N.x +my(1)*N.y)*vh )
+                      ;
+
+// Computing the volume
+V(0)= int2d(Th0)(1.0);
+totalvolume=0.0;
+for (int i=0; i<npart; i++){
+  theta= randreal1()*45.0*pi/180.0;
+  mx(i)= cos(theta);
+  my(i)= sin(theta);
+  totalvolume= totalvolume +V(i);
+}
+
+hi= initialfield;
+hf= finalfield;
+dh= (hf-hi)/numberofpoints;
+while (hi<hf){
+  h=[0.0,hi];
+  f=0;
+  st=0.5;
+  while (f==0){
+    mxpast= mx;
+    mypast= my;
+    // Solving for u_{k}
+    A= aa(Vh,Vh);
+    F[]= ff(0,Vh);
+    uh[]= A^-1*F[];
+    hx= dx(uh); hy= dy(uh);
+    // Computing E_{k}
+    E0= 0.5*int2d(Th)( hx*hx +hy*hy );
+    for (int i=0; i<npart; i++){
+      E0= E0 -V(i)*( mx(i)*h[0] +my(i)*h[1] );
+    }
+    // Computing Grad_m (E_{k})
+    for (int i=0; i<npart; i++){
+      Gradmx(i)= -int1d(Th,i)( uh*N.x ) -V(i)*h[0];
+      Gradmy(i)= -int1d(Th,i)( uh*N.y ) -V(i)*h[1];
+      gnorm= sqrt(Gradmx(i)^2.0 +Gradmy(i)^2.0);
+      dirx= Gradmx(i)/gnorm;
+      diry= Gradmy(i)/gnorm;
+      // Moving the magnetization to the k+1 state
+      mx(i)= mx(i) -st*dirx +beta*randreal1();
+      my(i)= my(i) -st*diry +beta*randreal1();
+      mnorm= sqrt( mx(i)^2.0 +my(i)^2.0 );
+      mx(i)= mx(i)/mnorm;
+      my(i)= my(i)/mnorm;
+    }
+    // Solving for u_{k+1}
+    A= aa(Vh,Vh);
+    F[]= ff(0,Vh);
+    uh[]= A^-1*F[];
+    hx= dx(uh); hy= dy(uh);
+    // Computing E_{k}
+    E1= 0.5*int2d(Th)( hx*hx +hy*hy );
+    for (int i=0; i<npart; i++){
+      E1= E1 -V(i)*( mx(i)*h[0] +my(i)*h[1] );
+    }
+    ED= E0 -E1;
+    cout <<"m0=" << mxpast(0) << "\t" << mypast(0) << endl;
+    cout <<"Gm=" << Gradmx(0) << "\t" << Gradmy(0) << endl;
+    cout <<"m1=" << mx(0) << "\t" << my(0) << endl;
+    cout <<"ED=" << ED << endl;
+    if (ED > tolerance){
+      st=1.05*st;
+    }
+    if (ED < -tolerance){
+      st=0.5*st;
+      mx= mxpast;
+      my= mypast;
+    }
+    if ( abs(ED)< tolerance ){
+      f=1; // out of energy minimization cycle
+    }
+  } // End Of While Energy Minimization
+  //plot(uh, value=1, wait=0, fill=1);
+  mtotx=0.0;
+  mtoty=0.0;
+  for (int i=0; i<npart; i++){
+    mtotx= mtotx +mx(i)*V(i)/totalvolume;
+    mtoty= mtoty +my(i)*V(i)/totalvolume;
+  }
+  cout << "Emin for H=" << (h(1)) << " found at  " << mtotx << "\t" << mtoty << endl;
+  outfile << (h(0)) +"\t"+ (h(1)) +"\t"+ mtotx +"\t"+ mtoty << endl;
+  it= it+1;
+  hi= hi+dh;
+}
+
+plot(uh, value=false, fill=1, ps="SW_P"+string(phi)+".eps");
+
+/*
+    DOWNWARD CYCLE
+*/
+
+
+hi= finalfield;
+hf= initialfield;
+dh= (hf-hi)/numberofpoints;
+while (hi>hf){
+  h=[0.0,hi];
+  f=0;
+  st=0.5;
+  while (f==0){
+    mxpast= mx;
+    mypast= my;
+    // Solving for u_{k}
+    A= aa(Vh,Vh);
+    F[]= ff(0,Vh);
+    uh[]= A^-1*F[];
+    hx= dx(uh); hy= dy(uh);
+    // Computing E_{k}
+    E0= 0.5*int2d(Th)( hx*hx +hy*hy );
+    for (int i=0; i<npart; i++){
+      E0= E0 -V(i)*( mx(i)*h[0] +my(i)*h[1] );
+    }
+    // Computing Grad_m (E_{k})
+    for (int i=0; i<npart; i++){
+      Gradmx(i)= -int1d(Th,i)( uh*N.x ) -V(i)*h[0];
+      Gradmy(i)= -int1d(Th,i)( uh*N.y ) -V(i)*h[1];
+      gnorm= sqrt(Gradmx(i)^2.0 +Gradmy(i)^2.0);
+      dirx= Gradmx(i)/gnorm;
+      diry= Gradmy(i)/gnorm;
+      // Moving the magnetization to the k+1 state
+      mx(i)= mx(i) -st*dirx +beta*randreal1();
+      my(i)= my(i) -st*diry +beta*randreal1();
+      mnorm= sqrt( mx(i)^2.0 +my(i)^2.0 );
+      mx(i)= mx(i)/mnorm;
+      my(i)= my(i)/mnorm;
+    }
+    // Solving for u_{k+1}
+    A= aa(Vh,Vh);
+    F[]= ff(0,Vh);
+    uh[]= A^-1*F[];
+    hx= dx(uh); hy= dy(uh);
+    // Computing E_{k}
+    E1= 0.5*int2d(Th)( hx*hx +hy*hy );
+    for (int i=0; i<npart; i++){
+      E1= E1 -V(i)*( mx(i)*h[0] +my(i)*h[1] );
+    }
+    ED= E0 -E1;
+    cout <<"m0=" << mxpast(0) << "\t" << mypast(0) << endl;
+    cout <<"Gm=" << Gradmx(0) << "\t" << Gradmy(0) << endl;
+    cout <<"m1=" << mx(0) << "\t" << my(0) << endl;
+    cout <<"ED=" << ED << endl;
+    if (ED > tolerance){
+      st=1.05*st;
+    }
+    if (ED < -tolerance){
+      st=0.5*st;
+      mx= mxpast;
+      my= mypast;
+    }
+    if ( abs(ED)< tolerance ){
+      f=1; // out of energy minimization cycle
+    }
+  } // End Of While Energy Minimization
+  //plot(uh, value=1, wait=0, fill=1);
+  mtotx=0.0;
+  mtoty=0.0;
+  for (int i=0; i<npart; i++){
+    mtotx= mtotx +mx(i)*V(i)/totalvolume;
+    mtoty= mtoty +my(i)*V(i)/totalvolume;
+  }
+  cout << "Emin for H=" << (h(1)) << " found at  " << mtotx << "\t" << mtoty << endl;
+  outfile << (h(0)) +"\t"+ (h(1)) +"\t"+ mtotx +"\t"+ mtoty << endl;
+  it= it+1;
+  hi= hi+dh;
+}
