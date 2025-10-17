@@ -1,4 +1,4 @@
-# SIMAGNA
+# Magnetic NanoParticle Simulator
 Simulator of Magnetic Nanomaterials.
 
 
@@ -8,3 +8,4 @@ The present code is the result of my phd. It s a code capable of determining the
 * The minimization of the micromagnetic energy by the use of the lagrange multiplier technique.
 * The weak form of the problem based on the Maxwell's equation for the system of a single cell.
 
+Pending complete reference
